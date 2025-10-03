@@ -4,10 +4,10 @@ from typing import Set
 from requests.exceptions import Timeout
 
 START_DATE = datetime(2015, 1, 1, tzinfo=timezone.utc)  # Дата начала сбора статистики
-PLATFORM_ID = "10049%27,%2710047"
-PRODUCT_FAMILY_ID = 100000013
-OS_NAME = "windows_7"
-OS_VERSION = "6.1.7601"
+PLATFORM_ID = "12099%27,%2712098%27,%2712097"
+PRODUCT_FAMILY_ID = 100000010
+OS_NAME = "windows_10"
+OS_VERSION = "10.0.19045"
 MAX_RETRIES = 5
 REQUEST_TIMEOUT = 5
 
