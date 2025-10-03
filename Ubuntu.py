@@ -11,12 +11,9 @@ REQUEST_TIMEOUT = 5
 OS_VERSION = "22.04.4"
 OS_NAME_VERSION = f"ubuntu_{OS_VERSION}"
 OUTPUT_FILENAME = f"{OS_NAME_VERSION}_bulletin.txt"
+MIN_DATE = datetime(2024, 2, 22)  # Минимальная дата для фильтрации
 
 # URL для скачивания OVAL файлов
-CVE_OVAL_URL = (
-    "https://security-metadata.canonical.com/"
-    "oval/com.ubuntu.jammy.cve.oval.xml.bz2"
-)
 USN_OVAL_URL = (
     "https://security-metadata.canonical.com/"
     "oval/com.ubuntu.jammy.usn.oval.xml.bz2"
@@ -47,50 +44,9 @@ def download_and_decompress(url: str) -> bytes:
             print(f"Ошибка загрузки. Повторная попытка {attempt + 1}...")
 
 
-def parse_cve_oval(data: bytes) -> Set[str]:
-    """
-    Парсит CVE OVAL файл и возвращает CVE с фиксом для версии 22.04.4
-    :param data: XML данные
-    :return: Множество CVE
-    :raises: etree.ParseError: Если возникает ошибка парсинга XML
-    """
-    root = etree.fromstring(data)
-    filtered_cves = set()
-
-    for definition in root.xpath('.//oval:definition', namespaces=OVAL_NAMESPACE):
-        metadata = definition.find('oval:metadata', namespaces=OVAL_NAMESPACE)
-        if metadata is None:
-            continue
-
-        advisory = metadata.find('oval:advisory', namespaces=OVAL_NAMESPACE)
-        if advisory is None:
-            continue
-
-        criteria = definition.find('.//oval:criteria', namespaces=OVAL_NAMESPACE)
-        found_fixed = False
-        found_version = False
-
-        if criteria is not None:
-            for node in criteria.iter():
-                comment = node.get('comment', '').lower()
-                if 'has been fixed' in comment:
-                    found_fixed = True
-                if OS_VERSION in comment:
-                    found_version = True
-
-        if not (found_fixed and found_version):
-            continue
-
-        for cve_elem in advisory.findall('oval:cve', namespaces=OVAL_NAMESPACE):
-            if cve_elem.text:
-                filtered_cves.add(cve_elem.text.strip())
-
-    return filtered_cves
-
-
 def parse_usn_oval(data: bytes) -> Set[str]:
     """
-    Парсит USN OVAL файл и возвращает все CVE
+    Парсит USN OVAL файл и возвращает CVE с датой выпуска >= MIN_DATE
     :param data: XML данные
     :return: Множество CVE
     """
@@ -102,17 +58,26 @@ def parse_usn_oval(data: bytes) -> Set[str]:
         if metadata is None:
             continue
 
-        # CVE из <reference>
-        for ref in metadata.findall('oval:reference', namespaces=OVAL_NAMESPACE):
-            if ref.get("source") == "CVE" and ref.get("ref_id"):
-                usn_cves.add(ref.get("ref_id").strip())
-
-        # CVE из <advisory><cve>
         advisory = metadata.find('oval:advisory', namespaces=OVAL_NAMESPACE)
-        if advisory is not None:
-            for cve_elem in advisory.findall('oval:cve', namespaces=OVAL_NAMESPACE):
-                if cve_elem.text:
-                    usn_cves.add(cve_elem.text.strip())
+        if advisory is None:
+            continue
+
+        # Проверяем дату выпуска (issued date)
+        issued = advisory.find('oval:issued', namespaces=OVAL_NAMESPACE)
+        if issued is None or 'date' not in issued.attrib:
+            continue
+
+        try:
+            advisory_date = datetime.strptime(issued.get('date'), "%Y-%m-%d")
+            if advisory_date < MIN_DATE:
+                continue
+        except ValueError:
+            continue
+
+        # Добавляем все CVE из этого advisory
+        for cve_elem in advisory.findall('oval:cve', namespaces=OVAL_NAMESPACE):
+            if cve_elem.text:
+                usn_cves.add(cve_elem.text.strip())
 
     return usn_cves
 
@@ -131,22 +96,12 @@ def main():
     start_time = datetime.now()
 
     try:
-        # CVE OVAL
-        print("Загрузка и обработка CVE OVAL файла...")
-        cve_data = download_and_decompress(CVE_OVAL_URL)
-        filtered_cves = parse_cve_oval(cve_data)
-        print(f"[CVE] Найдено {len(filtered_cves)} CVE с фиксом для {OS_VERSION}")
-
         # USN OVAL
         print("Загрузка и обработка USN OVAL файла...")
         usn_data = download_and_decompress(USN_OVAL_URL)
-        usn_cves = parse_usn_oval(usn_data)
-        print(f"[USN] Найдено {len(usn_cves)} уникальных CVE")
-
-        # Пересечение для поиска нужного
-        intersection = filtered_cves.intersection(usn_cves)
-        print(f"Найдено {len(intersection)} CVE в обоих файлах")
-        save_result(intersection)
+        filtered_cves = parse_usn_oval(usn_data)
+        print(f"Найдено {len(filtered_cves)} CVE")
+        save_result(filtered_cves)
 
     except Exception as e:
         print(f"Ошибка: {str(e)}")
